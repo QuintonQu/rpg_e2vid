@@ -5,7 +5,7 @@ from model.model import *
 from utils.inference_utils import CropParameters, EventPreprocessor, IntensityRescaler, ImageFilter, ImageDisplay, ImageWriter, UnsharpMaskFilter
 from utils.inference_utils import upsample_color_image, merge_channels_into_color_image  # for color reconstruction
 from utils.util import robust_min, robust_max
-from utils.timers import CudaTimer, cuda_timers
+from utils.timers import CudaTimer, cuda_timers, Timer
 from os.path import join
 from collections import deque
 import torch.nn.functional as F
@@ -16,7 +16,13 @@ class ImageReconstructor:
 
         self.model = model
         self.use_gpu = options.use_gpu
-        self.device = torch.device('cuda:0') if self.use_gpu else torch.device('cpu')
+        # self.device = torch.device('cuda:0') if self.use_gpu else torch.device('cpu')
+        if self.use_gpu and torch.cuda.is_available():
+            self.device = torch.device('cuda:0')
+        elif self.use_gpu and torch.backends.mps.is_available():
+            self.device = torch.device('mps')
+        else:
+            self.device = torch.device('cpu')
         self.height = height
         self.width = width
         self.num_bins = num_bins
@@ -56,10 +62,11 @@ class ImageReconstructor:
 
     def update_reconstruction(self, event_tensor, event_tensor_id, stamp=None):
         with torch.no_grad():
+            DeviceTimer = CudaTimer if self.device.type == 'cuda' else Timer
 
-            with CudaTimer('Reconstruction'):
+            with DeviceTimer('Reconstruction'):
 
-                with CudaTimer('NumPy (CPU) -> Tensor (GPU)'):
+                with DeviceTimer('NumPy (CPU) -> Tensor (GPU)'):
                     events = event_tensor.unsqueeze(dim=0)
                     events = events.to(self.device)
 
@@ -76,7 +83,7 @@ class ImageReconstructor:
 
                 # Reconstruct new intensity image for each channel (grayscale + RGBW if color reconstruction is enabled)
                 for channel in events_for_each_channel.keys():
-                    with CudaTimer('Inference'):
+                    with DeviceTimer('Inference'):
                         new_predicted_frame, states = self.model(events_for_each_channel[channel],
                                                                  self.last_states_for_each_channel[channel])
 
@@ -94,7 +101,7 @@ class ImageReconstructor:
                     # Intensity rescaler (on GPU)
                     new_predicted_frame = self.intensity_rescaler(new_predicted_frame)
 
-                    with CudaTimer('Tensor (GPU) -> NumPy (CPU)'):
+                    with DeviceTimer('Tensor (GPU) -> NumPy (CPU)'):
                         reconstructions_for_each_channel[channel] = new_predicted_frame[0, 0, crop.iy0:crop.iy1,
                                                                                         crop.ix0:crop.ix1].cpu().numpy()
 

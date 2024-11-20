@@ -29,6 +29,7 @@ if __name__ == "__main__":
                               automatically computed as N = width * height * num_events_per_pixel')
     parser.add_argument('--skipevents', default=0, type=int)
     parser.add_argument('--suboffset', default=0, type=int)
+    parser.add_argument('--time_offset', default=0.0, type=float)
     parser.add_argument('--compute_voxel_grid_on_cpu', dest='compute_voxel_grid_on_cpu', action='store_true')
     parser.set_defaults(compute_voxel_grid_on_cpu=False)
 
@@ -39,8 +40,8 @@ if __name__ == "__main__":
     # Read sensor size from the first first line of the event file
     path_to_events = args.input_file
 
-    header = pd.read_csv(path_to_events, delim_whitespace=True, header=None, names=['width', 'height'],
-                         dtype={'width': np.int, 'height': np.int},
+    header = pd.read_csv(path_to_events, sep=r'\s+', header=None, names=['width', 'height'],
+                         dtype={'width': np.int32, 'height': np.int32},
                          nrows=1)
     width, height = header.values[0]
     print('Sensor size: {} x {}'.format(width, height))
@@ -83,7 +84,8 @@ if __name__ == "__main__":
     if args.fixed_duration:
         event_window_iterator = FixedDurationEventReader(path_to_events,
                                                          duration_ms=args.window_duration,
-                                                         start_index=start_index)
+                                                         start_index=start_index,
+                                                         time_offset=args.time_offset)
     else:
         event_window_iterator = FixedSizeEventReader(path_to_events, num_events=N, start_index=start_index)
 

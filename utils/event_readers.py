@@ -14,7 +14,7 @@ class FixedSizeEventReader:
     def __init__(self, path_to_event_file, num_events=10000, start_index=0):
         print('Will use fixed size event windows with {} events'.format(num_events))
         print('Output frame rate: variable')
-        self.iterator = pd.read_csv(path_to_event_file, delim_whitespace=True, header=None,
+        self.iterator = pd.read_csv(path_to_event_file, sep=r'\s+', header=None,
                                     names=['t', 'x', 'y', 'pol'],
                                     dtype={'t': np.float64, 'x': np.int16, 'y': np.int16, 'pol': np.int16},
                                     engine='c',
@@ -38,7 +38,7 @@ class FixedDurationEventReader:
               The reason is that the latter can use Pandas' very efficient cunk-based reading scheme implemented in C.
     """
 
-    def __init__(self, path_to_event_file, duration_ms=50.0, start_index=0):
+    def __init__(self, path_to_event_file, duration_ms=50.0, start_index=0, time_offset=0.0):
         print('Will use fixed duration event windows of size {:.2f} ms'.format(duration_ms))
         print('Output frame rate: {:.1f} Hz'.format(1000.0 / duration_ms))
         file_extension = splitext(path_to_event_file)[1]
@@ -59,6 +59,7 @@ class FixedDurationEventReader:
 
         self.last_stamp = None
         self.duration_s = duration_ms / 1000.0
+        self.time_offset = time_offset / 1000.0
 
     def __iter__(self):
         return self
@@ -79,9 +80,9 @@ class FixedDurationEventReader:
                 t, x, y, pol = float(t), int(x), int(y), int(pol)
                 event_list.append([t, x, y, pol])
                 if self.last_stamp is None:
-                    self.last_stamp = t
-                if t > self.last_stamp + self.duration_s:
-                    self.last_stamp = t
+                    self.last_stamp = self.time_offset + t
+                if t >= self.last_stamp + self.duration_s:
+                    self.last_stamp += self.duration_s
                     event_window = np.array(event_list)
                     return event_window
 

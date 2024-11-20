@@ -13,6 +13,7 @@ import atexit
 import scipy.stats as st
 import torch.nn.functional as F
 from math import sqrt
+import os
 
 
 def make_event_preview(events, mode='red-blue', num_bins_to_show=-1):
@@ -80,6 +81,7 @@ class EventPreprocessor:
         self.flip = options.flip
         if self.flip:
             print('Will flip event tensors.')
+        self.device_timer = CudaTimer if options.use_gpu and torch.cuda.is_available() else Timer
 
     def __call__(self, events):
 
@@ -94,7 +96,7 @@ class EventPreprocessor:
         # Normalize the event tensor (voxel grid) so that
         # the mean and stddev of the nonzero values in the tensor are equal to (0.0, 1.0)
         if not self.no_normalize:
-            with CudaTimer('Normalization'):
+            with self.device_timer('Normalization'):
                 nonzero_ev = (events != 0)
                 num_nonzeros = nonzero_ev.sum()
                 if num_nonzeros > 0:
@@ -122,13 +124,14 @@ class IntensityRescaler:
         self.auto_hdr_median_filter_size = options.auto_hdr_median_filter_size
         self.Imin = options.Imin
         self.Imax = options.Imax
+        self.device_timer = CudaTimer if options.use_gpu and torch.cuda.is_available() else Timer
 
     def __call__(self, img):
         """
         param img: [1 x 1 x H x W] Tensor taking values in [0, 1]
         """
         if self.auto_hdr:
-            with CudaTimer('Compute Imin/Imax (auto HDR)'):
+            with self.device_timer('Compute Imin/Imax (auto HDR)'):
                 Imin = torch.min(img).item()
                 Imax = torch.max(img).item()
 
@@ -144,7 +147,7 @@ class IntensityRescaler:
                 self.Imin = np.median([rmin for rmin, rmax in self.intensity_bounds])
                 self.Imax = np.median([rmax for rmin, rmax in self.intensity_bounds])
 
-        with CudaTimer('Intensity rescaling'):
+        with self.device_timer('Intensity rescaling'):
             img = 255.0 * (img - self.Imin) / (self.Imax - self.Imin)
             img.clamp_(0.0, 255.0)
             img = img.byte()  # convert to 8-bit tensor
@@ -190,9 +193,19 @@ class ImageWriter:
                                                num_bins_to_show=self.num_bins_to_show)
             cv2.imwrite(join(self.event_previews_folder,
                              'events_{:010d}.png'.format(event_tensor_id)), event_preview)
+            
+        base_filename = join(self.output_folder, self.dataset_name, 'frame_{:.8f}.png'.format(stamp))
+        filename = base_filename
+        counter = 2
 
-        cv2.imwrite(join(self.output_folder, self.dataset_name,
-                         'frame_{:010d}.png'.format(event_tensor_id)), img)
+        while os.path.exists(filename):
+            filename = base_filename.replace('.png', f'_{counter}.png')
+            counter += 1
+
+        cv2.imwrite(filename, img)
+
+        # cv2.imwrite(join(self.output_folder, self.dataset_name,
+        #                  'frame_{:.8f}.png'.format(stamp)), img)
         if stamp is not None:
             self.timestamps_file.write('{:.18f}\n'.format(stamp))
 
@@ -268,10 +281,11 @@ class UnsharpMaskFilter:
         self.gaussian_kernel_size = 5
         self.gaussian_kernel = gkern(self.gaussian_kernel_size,
                                      self.unsharp_mask_sigma).unsqueeze(0).unsqueeze(0).to(device)
+        self.device_timer = CudaTimer if device.type == 'cuda' else Timer
 
     def __call__(self, img):
         if self.unsharp_mask_amount > 0:
-            with CudaTimer('Unsharp mask'):
+            with self.device_timer('Unsharp mask'):
                 blurred = F.conv2d(img, self.gaussian_kernel,
                                    padding=self.gaussian_kernel_size // 2)
                 img = (1 + self.unsharp_mask_amount) * img - self.unsharp_mask_amount * blurred
@@ -497,7 +511,7 @@ def events_to_voxel_grid_pytorch(events, num_bins, width, height, device):
 
     with torch.no_grad():
 
-        events_torch = torch.from_numpy(events)
+        events_torch = torch.from_numpy(events.astype(np.float32))
         with DeviceTimer('Events -> Device (voxel grid)'):
             events_torch = events_torch.to(device)
 
